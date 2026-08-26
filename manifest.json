@@ -1,0 +1,17 @@
+{
+  "theme_color": "#202124",
+  "background_color": "#f5f5f5",
+  "display": "standalone",
+  "scope": "./",
+  "start_url": "./index.html",
+  "name": "テキストエディタ TXT-ED",
+  "short_name": "TXT-ED",
+  "description": "高機能エディタ",
+  "icons": [
+    {
+      "src": "icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
