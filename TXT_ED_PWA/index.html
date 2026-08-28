@@ -8,7 +8,6 @@ device-width,
 initial-scale=1.0, 
 maximum-scale=1.0, 
 user-scalable=no">
-<!-- PWA設定をindexに連結 -->
 <link rel="manifest" 
 href="manifest.json">
 <title>TXT_ED</title>
@@ -121,6 +120,15 @@ border: 1px solid
 padding: 6px 10px;
 border-radius: 4px; 
 cursor: pointer;
+font-weight: bold;
+}
+.decor-btns 
+button.active {
+background-color: 
+#e28743 !important;
+border-color: 
+#e28743 !important;
+color: white !important;
 }
 .size-container {
 display: flex; 
@@ -383,6 +391,9 @@ justify-content:
 space-between; 
 align-items: center;
 font-size: 12px;
+/* 長押し時にブラウザ標準のテキスト選択が暴走するのを防止 */
+user-select: none !important;
+-webkit-user-select: none !important;
 }
 .file-item.active {
 background-color: 
@@ -521,15 +532,15 @@ class="color-palette-bar">
 <div class="decor-btns" 
 onmousedown="
 event.preventDefault()">
-<button 
+<button id="cmdBold"
 onclick="
 execCmd('bold')">
-<b>B</b>
+B
 </button>
-<button 
+<button id="cmdItalic"
 onclick="
 execCmd('italic')">
-<i>I</i>
+I
 </button>
 </div>
 <div class="size-container">
@@ -724,7 +735,6 @@ const baseColors = [
 ];
 
 window.onload = () => {
-// 【追加】PWAサービスワーカーを起動
 if ("serviceWorker" in navigator) {
 navigator.serviceWorker.register("sw.js");
 }
@@ -735,9 +745,17 @@ saveCurrentFile();
 });
 fileNameDisplay.addEventListener('contextmenu', (e) => {
 e.preventDefault();
-changeFileName();
+changeFileName(currentFileName);
 });
 };
+
+function checkDecorState() {
+if (currentMode !== 'text') return;
+const isBold = document.queryCommandState('bold');
+const isItalic = document.queryCommandState('italic');
+document.getElementById('cmdBold').classList.toggle('active', isBold);
+document.getElementById('cmdItalic').classList.toggle('active', isItalic);
+}
 
 function saveSelection() {
 const sel = window.getSelection();
@@ -749,6 +767,7 @@ if (ed.closest && ed.closest('.page-editor')) {
 savedRange = range.cloneRange();
 }
 }
+checkDecorState();
 }
 
 function createPageElement(html, imgData, index) {
@@ -760,7 +779,10 @@ const editorDiv = document.createElement('div');
 editorDiv.className = 'page-editor';
 editorDiv.contentEditable = 'true';
 editorDiv.innerHTML = html || '';
-editorDiv.oninput = () => saveCurrentFile();
+editorDiv.oninput = () => {
+saveCurrentFile();
+checkDecorState();
+};
 
 editorDiv.onmouseup = () => saveSelection();
 editorDiv.onkeyup = () => saveSelection();
@@ -786,6 +808,7 @@ sel.removeAllRanges();
 sel.addRange(range);
 saveSelection();
 }
+checkDecorState();
 });
 
 editorDiv.addEventListener('keydown', (e) => {
@@ -954,25 +977,53 @@ loadFolderData();
 }
 }
 
-// 右クリックでファイル名をいつでも変更可能
-function changeFileName() {
-const oldName = currentFileName.replace('.txt', '');
+// 【機能修正】引数でターゲット名を受け取る汎用的な名前変更ロジック
+function changeFileName(targetName) {
+const oldName = targetName.replace('.txt', '');
 const newName = prompt('新しいファイル名:', oldName);
 if (!newName || newName.trim() === '') return;
 const fullName = newName.trim() + '.txt';
-if (fullName !== currentFileName && TXT_ED_FOLDER[fullName]) {
+if (fullName !== targetName && TXT_ED_FOLDER[fullName]) {
 alert('既に使われています'); 
 return;
 }
-TXT_ED_FOLDER[fullName] = TXT_ED_FOLDER[currentFileName];
-delete TXT_ED_FOLDER[currentFileName];
+TXT_ED_FOLDER[fullName] = TXT_ED_FOLDER[targetName];
+delete TXT_ED_FOLDER[targetName];
+if (targetName === currentFileName) {
 currentFileName = fullName;
 try {
 localStorage.setItem('TXT_ED_curr', currentFileName);
 }catch(e){}
 fileNameDisplay.textContent = fullName;
+}
 saveCurrentFile();
 renderFileList();
+}
+
+// 【新規追加】長押し（1秒）を検知するためのイベント付与ロジック
+function bindLongPress(element, fileName) {
+let pressTimer = null;
+const startPress = (e) => {
+// 右クリックや✕ボタンのクリックは除外
+if (e.button && e.button !== 0) return;
+pressTimer = setTimeout(() => {
+pressTimer = null;
+changeFileName(fileName);
+}, 1000); // 1000ミリ秒（1秒）で長押し発動
+};
+const cancelPress = () => {
+if (pressTimer !== null) {
+clearTimeout(pressTimer);
+pressTimer = null;
+}
+};
+// マウス・タッチ両方のイベントを網羅
+element.addEventListener('mousedown', startPress);
+element.addEventListener('touchstart', startPress, {passive: true});
+element.addEventListener('mouseup', cancelPress);
+element.addEventListener('mouseleave', cancelPress);
+element.addEventListener('touchend', cancelPress);
+element.addEventListener('touchmove', cancelPress);
 }
 
 function renderFileList() {
@@ -982,9 +1033,14 @@ const item = document.createElement('div');
 const isActive = name === currentFileName;
 item.className = 'file-item' + (isActive ? ' active' : '');
 item.onclick = () => switchFile(name);
+
 const nameSpan = document.createElement('span');
 nameSpan.textContent = name;
 item.appendChild(nameSpan);
+
+// アイテム生成時に長押しリネーム関数をバインド
+bindLongPress(item, name);
+
 const delSpan = document.createElement('span');
 delSpan.textContent = '✕';
 delSpan.className = 'delete-btn';
@@ -1163,6 +1219,7 @@ function disableEraser() {
 isEraser = false; btnEraser.classList.remove('active'); 
 }
 
+// 図形タイプを切り替える
 function setShape(shape) {
 currentShape = shape;
 disableEraser();
@@ -1200,6 +1257,7 @@ sel.removeAllRanges(); sel.addRange(savedRange);
 }
 document.execCommand(cmd, false, null); 
 saveCurrentFile();
+checkDecorState();
 }
 }
 
@@ -1226,6 +1284,7 @@ sliderLabel.textContent = 'サイズ:';
 sizeSlider.min = "1"; sizeSlider.max = "7"; 
 sizeSlider.value = textFontSize.toString();
 sliderValue.textContent = textFontSize;
+checkDecorState();
 }
 if (!isEraser) initPalette();
 }
@@ -1240,7 +1299,7 @@ document.getElementById('imgInput').click();
 
 function insertImg(e) {
 if (!e.target.files || e.target.files.length === 0) return;
-const file = e.target.files;
+const file = e.target.files[0];
 
 const reader = new FileReader();
 reader.onload = (event) => {
