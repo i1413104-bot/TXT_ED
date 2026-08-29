@@ -97,7 +97,7 @@ background-color:
 #1a73e8; 
 color: white;
 }
-#btnUndo {
+#btnUndo, #btnRedo {
 background-color: 
 #5f6368;
 color: white;
@@ -267,6 +267,10 @@ height: 100%;
 background-color: 
 #e28743 !important;
 }
+.page-del-btn {
+background-color: 
+#a51d24 !important;
+}
 .clear-btn { 
 background-color: 
 #a51d24; 
@@ -350,8 +354,7 @@ z-index: 2;
 canvas.active-pen { 
 pointer-events: auto; 
 }
-</style>
-<style>
+</style><style>
 .preview-area {
 flex: 1; 
 background-color: 
@@ -378,7 +381,7 @@ overflow-y: auto;
 padding: 5px; 
 }
 .file-item {
-padding: 10px; 
+padding: 0; 
 margin-bottom: 4px;
 background-color: 
 white; 
@@ -391,7 +394,6 @@ justify-content:
 space-between; 
 align-items: center;
 font-size: 12px;
-/* 長押し時にブラウザ標準のテキスト選択が暴走するのを防止 */
 user-select: none !important;
 -webkit-user-select: none !important;
 }
@@ -402,11 +404,34 @@ border-color:
 #1a73e8; 
 font-weight: bold;
 }
+.file-controls {
+display: flex;
+align-items: center;
+gap: 2px;
+padding-right: 6px;
+}
+.move-btn {
+color: #1a73e8;
+cursor: pointer;
+padding: 2px 6px;
+font-size: 11px;
+font-weight: bold;
+border-radius: 3px;
+border: 1px solid 
+transparent;
+}
+.move-btn:hover {
+background-color: 
+#e8f0fe;
+border-color: 
+#1a73e8;
+}
 .file-item 
 .delete-btn { 
 color: #d93025; 
 cursor: pointer; 
 padding: 4px 8px; 
+font-weight: bold;
 }
 footer {
 background-color: 
@@ -482,6 +507,11 @@ onclick="
 setMode('pen')">
 ✏️ ペン
 </button>
+<button id="btnRedo" 
+onclick="
+redoPen()">
+🔁 進む
+</button>
 <button id="btnUndo" 
 onclick="
 undoPen()">
@@ -515,14 +545,15 @@ class="all-save-btn">
 <div class="btn-col">
 <button 
 onclick="
-downloadFile()">
-PC保存
-</button>
-<button 
-onclick="
 addInputPage()" 
 class="page-add-btn">
 📄 ページ追加
+</button>
+<button 
+onclick="
+deleteLastPage()" 
+class="page-del-btn">
+🗑️ ページ削除
 </button>
 </div>
 </div>
@@ -540,7 +571,7 @@ B
 <button id="cmdItalic"
 onclick="
 execCmd('italic')">
-I
+ 𝘐 
 </button>
 </div>
 <div class="size-container">
@@ -549,6 +580,8 @@ I
 id="sizeSlider" 
 min="1" max="7" 
 value="3" 
+onmousedown="
+event.stopPropagation()"
 oninput="
 onSizeChange(
 this.value)">
@@ -672,7 +705,9 @@ let currentFileName = 'memo1.txt';
 let penWidth = 3;
 let textFontSize = 3;
 let TXT_ED_FOLDER = {};
+
 let undoStackMap = new Map();
+let redoStackMap = new Map();
 
 let targetEl = null;
 let dragMode = '';
@@ -736,7 +771,7 @@ const baseColors = [
 
 window.onload = () => {
 if ("serviceWorker" in navigator) {
-navigator.serviceWorker.register("sw.js");
+navigator.serviceWorker.register("sw.js").catch(()=>{});
 }
 initPalette();
 loadFolderData();
@@ -751,19 +786,31 @@ changeFileName(currentFileName);
 
 function checkDecorState() {
 if (currentMode !== 'text') return;
+try {
 const isBold = document.queryCommandState('bold');
 const isItalic = document.queryCommandState('italic');
 document.getElementById('cmdBold').classList.toggle('active', isBold);
 document.getElementById('cmdItalic').classList.toggle('active', isItalic);
+} catch(e){}
+}
+
+function cleanEmptyImgBlocks(editor) {
+const blocks = editor.querySelectorAll('.img-block');
+blocks.forEach(b => {
+const img = b.querySelector('img');
+if (!img) {
+b.remove();
+}
+});
 }
 
 function saveSelection() {
 const sel = window.getSelection();
-if (sel.rangeCount > 0) {
+if (sel && sel.rangeCount > 0) {
 const range = sel.getRangeAt(0);
 const node = range.startContainer;
 const ed = node.nodeType === 1 ? node : node.parentNode;
-if (ed.closest && ed.closest('.page-editor')) {
+if (ed && ed.closest && ed.closest('.page-editor')) {
 savedRange = range.cloneRange();
 }
 }
@@ -780,12 +827,17 @@ editorDiv.className = 'page-editor';
 editorDiv.contentEditable = 'true';
 editorDiv.innerHTML = html || '';
 editorDiv.oninput = () => {
+cleanEmptyImgBlocks(editorDiv);
 saveCurrentFile();
 checkDecorState();
 };
 
 editorDiv.onmouseup = () => saveSelection();
-editorDiv.onkeyup = () => saveSelection();
+editorDiv.onselectionchange = () => saveSelection();
+editorDiv.onkeyup = () => {
+cleanEmptyImgBlocks(editorDiv);
+saveSelection();
+};
 
 editorDiv.addEventListener('click', (e) => {
 if (currentMode !== 'text') return;
@@ -816,7 +868,7 @@ if (e.key === 'Enter') {
 const br = document.createElement('br');
 br.style.clear = 'both';
 const sel = window.getSelection();
-if (sel.rangeCount) {
+if (sel && sel.rangeCount) {
 const range = sel.getRangeAt(0);
 range.insertNode(br);
 range.setStartAfter(br);
@@ -849,11 +901,11 @@ if (imgData) {
 const img = new Image();
 img.onload = () => {
 ctx.drawImage(img, 0, 0);
-saveUndoState(index, cvs.toDataURL());
+saveUndoState(index, cvs.toDataURL(), true);
 };
 img.src = imgData;
 } else {
-saveUndoState(index, cvs.toDataURL());
+saveUndoState(index, cvs.toDataURL(), true);
 }
 setupDrawingEvents(cvs, ctx, index);
 }
@@ -893,6 +945,7 @@ renderFileList();
 function loadFileContent(fileName) {
 pageContainer.innerHTML = '';
 undoStackMap.clear();
+redoStackMap.clear();
 const fileData = TXT_ED_FOLDER[fileName];
 if (fileData && fileData.pages) {
 fileData.pages.forEach((p, idx) => {
@@ -922,6 +975,23 @@ localStorage.setItem('TXT_ED_FOLDER',
 JSON.stringify(TXT_ED_FOLDER));
 } catch (e) {}
 updateCount();
+}
+
+function deleteLastPage() {
+const pages = pageContainer.querySelectorAll('.a4-page');
+if (pages.length <= 1) {
+alert('これ以上ページを削除できません');
+return;
+}
+if (!confirm(`最後のページを完全に削除しますか？`)) {
+return;
+}
+const lastPage = pages[pages.length - 1];
+const idx = parseInt(lastPage.dataset.index);
+undoStackMap.delete(idx);
+redoStackMap.delete(idx);
+lastPage.remove();
+saveCurrentFile();
 }
 
 function exportToPDF() {
@@ -977,7 +1047,6 @@ loadFolderData();
 }
 }
 
-// 【機能修正】引数でターゲット名を受け取る汎用的な名前変更ロジック
 function changeFileName(targetName) {
 const oldName = targetName.replace('.txt', '');
 const newName = prompt('新しいファイル名:', oldName);
@@ -987,8 +1056,17 @@ if (fullName !== targetName && TXT_ED_FOLDER[fullName]) {
 alert('既に使われています'); 
 return;
 }
-TXT_ED_FOLDER[fullName] = TXT_ED_FOLDER[targetName];
-delete TXT_ED_FOLDER[targetName];
+
+const newFolder = {};
+Object.keys(TXT_ED_FOLDER).forEach(k => {
+if (k === targetName) {
+newFolder[fullName] = TXT_ED_FOLDER[targetName];
+} else {
+newFolder[k] = TXT_ED_FOLDER[k];
+}
+});
+TXT_ED_FOLDER = newFolder;
+
 if (targetName === currentFileName) {
 currentFileName = fullName;
 try {
@@ -1000,29 +1078,66 @@ saveCurrentFile();
 renderFileList();
 }
 
-// 【新規追加】長押し（1秒）を検知するためのイベント付与ロジック
+function moveFileOrder(name, direction) {
+saveCurrentFile();
+const keys = Object.keys(TXT_ED_FOLDER);
+const index = keys.indexOf(name);
+if (index === -1) return;
+
+const targetIdx = direction === 'up' ? index - 1 : index + 1;
+if (targetIdx < 0 || targetIdx >= keys.length) return;
+
+const temp = keys[index];
+keys[index] = keys[targetIdx];
+keys[targetIdx] = temp;
+
+const rearrangedFolder = {};
+keys.forEach(k => {
+rearrangedFolder[k] = TXT_ED_FOLDER[k];
+});
+TXT_ED_FOLDER = rearrangedFolder;
+
+try {
+localStorage.setItem('TXT_ED_FOLDER', JSON.stringify(TXT_ED_FOLDER));
+} catch(e){}
+renderFileList();
+}
+
 function bindLongPress(element, fileName) {
 let pressTimer = null;
+let isLongPress = false;
+
 const startPress = (e) => {
-// 右クリックや✕ボタンのクリックは除外
 if (e.button && e.button !== 0) return;
+isLongPress = false;
 pressTimer = setTimeout(() => {
-pressTimer = null;
+isLongPress = true;
 changeFileName(fileName);
-}, 1000); // 1000ミリ秒（1秒）で長押し発動
+}, 1000);
 };
+
+const endPress = (e) => {
+if (pressTimer !== null) {
+clearTimeout(pressTimer);
+pressTimer = null;
+}
+if (!isLongPress) {
+switchFile(fileName);
+}
+};
+
 const cancelPress = () => {
 if (pressTimer !== null) {
 clearTimeout(pressTimer);
 pressTimer = null;
 }
 };
-// マウス・タッチ両方のイベントを網羅
+
 element.addEventListener('mousedown', startPress);
 element.addEventListener('touchstart', startPress, {passive: true});
-element.addEventListener('mouseup', cancelPress);
+element.addEventListener('mouseup', endPress);
+element.addEventListener('touchend', endPress);
 element.addEventListener('mouseleave', cancelPress);
-element.addEventListener('touchend', cancelPress);
 element.addEventListener('touchmove', cancelPress);
 }
 
@@ -1032,23 +1147,53 @@ Object.keys(TXT_ED_FOLDER).forEach(name => {
 const item = document.createElement('div');
 const isActive = name === currentFileName;
 item.className = 'file-item' + (isActive ? ' active' : '');
-item.onclick = () => switchFile(name);
+
+const leftClickZone = document.createElement('div');
+leftClickZone.style.flex = "1";
+leftClickZone.style.display = "flex";
+leftClickZone.style.alignItems = "center";
+leftClickZone.style.padding = "10px 0 10px 8px";
+leftClickZone.style.cursor = "pointer";
 
 const nameSpan = document.createElement('span');
 nameSpan.textContent = name;
-item.appendChild(nameSpan);
+leftClickZone.appendChild(nameSpan);
 
-// アイテム生成時に長押しリネーム関数をバインド
-bindLongPress(item, name);
+bindLongPress(leftClickZone, name);
+item.appendChild(leftClickZone);
+
+const controlsDiv = document.createElement('div');
+controlsDiv.className = 'file-controls';
+
+const upBtn = document.createElement('span');
+upBtn.className = 'move-btn';
+upBtn.textContent = '▲';
+upBtn.onclick = (e) => {
+e.stopPropagation();
+moveFileOrder(name, 'up');
+};
+controlsDiv.appendChild(upBtn);
+
+const downBtn = document.createElement('span');
+downBtn.className = 'move-btn';
+downBtn.textContent = '▽';
+downBtn.onclick = (e) => {
+e.stopPropagation();
+moveFileOrder(name, 'down');
+};
+controlsDiv.appendChild(downBtn);
 
 const delSpan = document.createElement('span');
 delSpan.textContent = '✕';
 delSpan.className = 'delete-btn';
 delSpan.onclick = (e) => {
 e.stopPropagation(); 
+e.preventDefault();
 deleteFile(name);
 };
-item.appendChild(delSpan);
+controlsDiv.appendChild(delSpan);
+
+item.appendChild(controlsDiv);
 fileListContainer.appendChild(item);
 });
 }
@@ -1117,7 +1262,7 @@ if (isDrawing) {
 isDrawing = false; 
 ctx.closePath();
 canvasSnap = null;
-saveUndoState(pageIdx, cvs.toDataURL()); 
+saveUndoState(pageIdx, cvs.toDataURL(), true); 
 saveCurrentFile();
 }
 };
@@ -1125,21 +1270,32 @@ cvs.addEventListener('pointerup', stopDraw);
 cvs.addEventListener('pointerleave', stopDraw);
 }
 
-function saveUndoState(idx, dataurl) {
+function saveUndoState(idx, dataurl, clearRedo = false) {
 if (!undoStackMap.has(idx)) undoStackMap.set(idx, []);
 const stack = undoStackMap.get(idx);
-if (stack.length >= 20) stack.shift();
+if (stack.length >= 10) {
+stack.shift();
+}
 stack.push(dataurl);
+
+if (clearRedo) {
+redoStackMap.set(idx, []);
+}
 }
 
 function undoPen() {
 const pages = pageContainer.querySelectorAll('.a4-page');
 pages.forEach(p => {
 const idx = parseInt(p.dataset.index);
-const stack = undoStackMap.get(idx);
-if (stack && stack.length > 1) {
-stack.pop();
-const prevState = stack[stack.length - 1];
+const uStack = undoStackMap.get(idx);
+if (uStack && uStack.length > 1) {
+if (!redoStackMap.has(idx)) redoStackMap.set(idx, []);
+const rStack = redoStackMap.get(idx);
+
+const currentImg = uStack.pop();
+rStack.push(currentImg);
+
+const prevState = uStack[uStack.length - 1];
 const cvs = p.querySelector('.page-canvas');
 const context = cvs.getContext('2d');
 const img = new Image();
@@ -1149,10 +1305,29 @@ context.drawImage(img, 0, 0);
 saveCurrentFile();
 }; 
 img.src = prevState;
-} else if (stack && stack.length === 1) {
+}
+});
+}
+
+function redoPen() {
+const pages = pageContainer.querySelectorAll('.a4-page');
+pages.forEach(p => {
+const idx = parseInt(p.dataset.index);
+const rStack = redoStackMap.get(idx);
+if (rStack && rStack.length > 0) {
+const nextState = rStack.pop();
+if (!undoStackMap.has(idx)) undoStackMap.set(idx, []);
+undoStackMap.get(idx).push(nextState);
+
 const cvs = p.querySelector('.page-canvas');
-cvs.getContext('2d').clearRect(0, 0, cvs.width, cvs.height);
+const context = cvs.getContext('2d');
+const img = new Image();
+img.onload = () => {
+context.clearRect(0, 0, cvs.width, cvs.height);
+context.drawImage(img, 0, 0);
 saveCurrentFile();
+}; 
+img.src = nextState;
 }
 });
 }
@@ -1180,8 +1355,8 @@ document.querySelectorAll('.color-dot').forEach(d =>
 d.classList.remove('selected'));
 element.classList.add('selected');
 if (currentMode === 'text') {
-if (savedRange) {
 const sel = window.getSelection();
+if (savedRange) {
 sel.removeAllRanges(); sel.addRange(savedRange);
 }
 document.execCommand('foreColor', false, color);
@@ -1196,8 +1371,8 @@ if(baseColors.length > 16) baseColors.pop();
 }
 selectedColor = color; initPalette(); disableEraser();
 if (currentMode === 'text') {
-if (savedRange) {
 const sel = window.getSelection();
+if (savedRange) {
 sel.removeAllRanges(); sel.addRange(savedRange);
 }
 document.execCommand('foreColor', false, color);
@@ -1219,7 +1394,6 @@ function disableEraser() {
 isEraser = false; btnEraser.classList.remove('active'); 
 }
 
-// 図形タイプを切り替える
 function setShape(shape) {
 currentShape = shape;
 disableEraser();
@@ -1239,8 +1413,8 @@ const canvases = pageContainer.querySelectorAll('.page-canvas');
 canvases.forEach(c => c.getContext('2d').lineWidth = penWidth);
 } else { 
 textFontSize = parseInt(val);
-if (savedRange) {
 const sel = window.getSelection();
+if (savedRange) {
 sel.removeAllRanges();
 sel.addRange(savedRange);
 }
@@ -1251,8 +1425,8 @@ saveCurrentFile();
 
 function execCmd(cmd) { 
 if (currentMode === 'text') {
-if (savedRange) {
 const sel = window.getSelection();
+if (savedRange) {
 sel.removeAllRanges(); sel.addRange(savedRange);
 }
 document.execCommand(cmd, false, null); 
@@ -1289,6 +1463,7 @@ checkDecorState();
 if (!isEraser) initPalette();
 }
 </script>
+
 <script>
 function triggerImgUp() { 
 if (currentMode !== 'text') {
@@ -1298,12 +1473,13 @@ document.getElementById('imgInput').click();
 }
 
 function insertImg(e) {
-if (!e.target.files || e.target.files.length === 0) return;
-const file = e.target.files[0];
+if (!e || !e.target || !e.target.files || e.target.files.length === 0) return;
+const file = e.target.files[0]; // 明示的に要素0番目のオブジェクトを直展開
 
 const reader = new FileReader();
 reader.onload = (event) => {
-const tag = '<div class="img-block" ' +
+const blockId = 'img_' + Date.now();
+const tag = '<div class="img-block" id="' + blockId + '" ' +
 'style="position:absolute;left:50px;top:50px;width:200px;' +
 'display:inline-block;" onmousedown="initMove(event,this,\'drag\')">' +
 '<img src="' + event.target.result + '" draggable="false" ' +
@@ -1316,6 +1492,18 @@ const firstEd = pageContainer.querySelector('.page-editor');
 if(firstEd) { 
 firstEd.focus(); 
 firstEd.insertAdjacentHTML('beforeend', tag);
+
+setTimeout(() => {
+const newBlock = firstEd.querySelector('#' + blockId);
+if (newBlock) {
+const sel = window.getSelection();
+const range = document.createRange();
+range.selectNode(newBlock);
+sel.removeAllRanges();
+sel.addRange(range);
+saveSelection();
+}
+}, 50);
 }
 saveCurrentFile(); 
 e.target.value = '';
@@ -1328,7 +1516,7 @@ if (!confirm('手描きをすべて消去しますか？')) return;
 pageContainer.querySelectorAll('.a4-page').forEach(p => {
 const cvs = p.querySelector('.page-canvas');
 cvs.getContext('2d').clearRect(0, 0, cvs.width, cvs.height);
-saveUndoState(parseInt(p.dataset.index), cvs.toDataURL());
+saveUndoState(parseInt(p.dataset.index), cvs.toDataURL(), true);
 });
 saveCurrentFile();
 }
